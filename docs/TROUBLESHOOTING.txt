@@ -1,0 +1,188 @@
+TROUBLESHOOTING GUIDE
+=====================
+
+Common issues and how to fix them.
+
+
+SEARCH SHOWS "NO RESULTS FOUND"
+-------------------------------
+
+Symptom: Type anything in market search, always shows "No results found"
+
+Check 1: Is the API being called?
+- Open browser DevTools > Network tab
+- Type in search box
+- Should see requests to /api/market/search
+- If no requests: frontend issue (see below)
+- If requests return 200 with empty results: backend issue
+
+Check 2: Backend logs
+  docker logs fna-api --tail 100
+
+Look for:
+- "Finnhub search returned X results" = working
+- "Using fallback search" = Finnhub not configured or failing
+- "Failed to get ticker" errors = yfinance rate limited
+
+Check 3: Is Finnhub configured?
+  cat backend/.env | grep FINNHUB
+
+If FINNHUB_API_KEY is empty, search uses fallback (limited but works).
+Get a free key at https://finnhub.io/register
+
+Check 4: Clear browser cache
+- Hard refresh: Ctrl+Shift+R
+- React Query caches results in memory
+- Restarting Docker doesn't clear browser cache
+
+
+MARKET DATA NOT LOADING
+-----------------------
+
+Symptom: Markets page shows loading spinners or stale data
+
+This is usually yfinance rate limiting.
+
+Check logs:
+  docker logs fna-api | grep -i "failed to get"
+
+If you see "JSONDecodeError" or "Expecting value" = rate limited
+
+Wait it out:
+- Rate limits are temporary
+- Cached data should still display
+- Usually recovers in a few minutes
+
+Clear Redis cache if stuck:
+  docker exec fna-redis redis-cli FLUSHDB
+  (nuclear option - clears everything)
+
+Or clear specific cache:
+  docker exec fna-redis redis-cli KEYS "cache:yf:*"
+  docker exec fna-redis redis-cli DEL "cache:yf:indices"
+
+
+API RETURNS 500 ERROR
+---------------------
+
+Check logs first:
+  docker logs fna-api --tail 50
+
+Common causes:
+
+"Redis connection refused":
+- Redis container not running
+- docker compose up redis
+
+"No module named X":
+- Dependencies changed, rebuild needed
+- docker compose build api
+
+"CUDA out of memory":
+- GPU memory exhausted by ML models
+- Set USE_GPU=false in .env
+- Restart: docker restart fna-api
+
+
+NLP ANALYSIS SLOW OR FAILING
+----------------------------
+
+First run is always slow:
+- FinBERT model downloads (~440MB)
+- Takes 10-30 seconds to load into memory
+- Subsequent calls are fast
+
+If consistently slow:
+- Check if GPU is being used: logs will show "Using device: cuda" or "cpu"
+- CPU inference is 5-10x slower
+- Consider reducing NLP_BATCH_SIZE
+
+If failing entirely:
+- Check logs for actual error
+- Try setting SENTIMENT_MODEL=textblob (faster, less accurate)
+- Make sure enough disk space for models
+
+
+DOCKER ISSUES
+-------------
+
+Container won't start:
+  docker compose logs <service-name>
+
+Port already in use:
+  # Find what's using the port
+  netstat -ano | findstr :5000
+  # Kill it or change port in docker-compose.yml
+
+Volume permission issues:
+  # Usually on Linux, not Windows
+  # Make sure user owns the directory
+
+Rebuild everything:
+  docker compose down
+  docker compose build --no-cache
+  docker compose up -d
+
+
+FRONTEND NOT UPDATING
+---------------------
+
+Code changes not reflecting:
+- Vite should hot reload automatically
+- Check browser console for errors
+- Try hard refresh (Ctrl+Shift+R)
+- Check if frontend container is running: docker ps
+
+API calls failing:
+- Check VITE_API_URL in docker-compose.yml
+- Should be http://localhost:5000
+- Make sure api container is healthy
+
+
+CHECKING SERVICE HEALTH
+-----------------------
+
+Quick health check:
+  curl http://localhost:5000/api/health
+
+Should return:
+  {"status": "ok", "redis": "connected", "timestamp": "..."}
+
+Check all containers:
+  docker compose ps
+
+All should show "Up" status.
+
+Check specific logs:
+  docker logs fna-api      # API server
+  docker logs fna-redis    # Redis
+  docker logs fna-frontend # React dev server
+  docker logs fna-pipeline # Background worker
+
+
+REDIS DATA INSPECTION
+---------------------
+
+See all keys:
+  docker exec fna-redis redis-cli KEYS "*"
+
+Check specific key:
+  docker exec fna-redis redis-cli GET "cache:yf:quote:AAPL"
+
+Check key TTL:
+  docker exec fna-redis redis-cli TTL "cache:yf:quote:AAPL"
+
+Count articles:
+  docker exec fna-redis redis-cli ZCARD "articles:all"
+
+
+RESETTING EVERYTHING
+--------------------
+
+If all else fails, full reset:
+
+  docker compose down -v        # Stop and remove volumes
+  docker compose build --no-cache
+  docker compose up -d
+
+This wipes Redis data. You'll need to re-fetch articles and re-run analysis.

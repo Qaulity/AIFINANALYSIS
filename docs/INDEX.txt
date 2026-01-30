@@ -1,0 +1,52 @@
+DOCUMENTATION INDEX
+===================
+
+This folder contains technical documentation explaining how things work
+and why they're built the way they are.
+
+
+FILES
+-----
+
+ARCHITECTURE.txt
+  Overall system design, technology choices, service structure.
+  Start here if you're new to the project.
+
+AI_INSIGHTS.txt
+  LLM-powered market analysis using Claude API.
+  Dashboard card, scheduled generation, caching, rate limiting.
+
+MARKET_DATA.txt
+  How stock data works - Finnhub for search, yfinance for history.
+  API keys needed, rate limiting, debugging tips.
+
+NLP_PIPELINE.txt
+  How sentiment analysis, entity extraction, and topic modeling work.
+  FinBERT, spaCy, BERTopic configuration and usage.
+
+FRONTEND.txt
+  React app structure, routing, state management with React Query.
+  Component patterns and styling approach.
+
+TROUBLESHOOTING.txt
+  Common problems and how to fix them.
+  Docker issues, API failures, debugging commands.
+
+CHANGELOG.txt
+  Notable changes and improvements.
+  Documents what was fixed/changed and why.
+
+
+ALSO SEE
+--------
+
+../README.md
+  Setup instructions, API endpoints, quick start guide.
+
+
+UPDATING THESE DOCS
+-------------------
+
+These are plain text files on purpose - easy to edit, no formatting hassle.
+Keep them practical and to the point.
+Update them when you change how something works.

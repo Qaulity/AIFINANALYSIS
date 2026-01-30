@@ -1,0 +1,239 @@
+FRONTEND STRUCTURE
+==================
+
+How the React frontend is organized.
+
+
+TECH CHOICES
+------------
+
+React 18 + TypeScript:
+- Type safety catches bugs early
+- Good IDE support
+- Industry standard
+
+Vite:
+- Fast dev server with HMR
+- Quick builds
+- Better than Create React App
+
+TailwindCSS:
+- Utility classes, no CSS files to manage
+- Consistent styling
+- Dark mode support built in
+
+React Query (TanStack Query):
+- Handles API state, caching, refetching
+- No manual loading/error states
+- Background refetching keeps data fresh
+
+Recharts:
+- Simple charting library
+- Works well with React
+- Good enough for dashboards
+
+
+PROJECT STRUCTURE
+-----------------
+
+frontend/src/
+  pages/           # Route-level components
+  components/      # Reusable UI components
+  hooks/           # Custom hooks (mostly API hooks)
+  services/        # API client
+  types/           # TypeScript interfaces
+
+
+PAGES
+-----
+
+Dashboard.tsx:
+- Landing page
+- Shows key metrics, recent articles, market overview
+- Multiple API calls on mount
+
+Articles.tsx:
+- Article list with filters
+- Pagination
+- Click to view details
+
+Markets.tsx:
+- Market indices display
+- Stock search (uses Finnhub)
+- Trending stocks
+- Historical charts
+
+TickerAnalysis.tsx:
+- Deep dive on single ticker
+- Price history + sentiment correlation
+- Related articles
+
+Trends.tsx:
+- Sentiment trends over time
+- Topic distribution
+- Ticker mentions
+
+NLPAnalysis.tsx:
+- Interactive text analysis
+- Paste any text, get sentiment/entities
+- Useful for testing
+
+
+API INTEGRATION
+---------------
+
+services/api.ts:
+- Axios instance with base URL
+- All API calls defined here
+- Returns typed responses
+
+hooks/useApi.ts:
+- React Query hooks wrapping API calls
+- Handles caching, loading, errors
+- Example:
+    const { data, isLoading, error } = useMarketSearch(query)
+
+Cache configuration (main.tsx):
+- Default staleTime: 2 minutes
+- Queries don't refetch on window focus
+- Keeps UI responsive
+
+
+DATA FLOW
+---------
+
+1. Component mounts
+2. useQuery hook triggers
+3. Check React Query cache
+4. If stale/missing, fetch from API
+5. Update cache
+6. Component re-renders with data
+
+Benefits:
+- Same data used across components (shared cache)
+- Background refetching keeps things fresh
+- Loading states handled automatically
+
+
+DARK MODE
+---------
+
+Implemented via Tailwind's dark mode:
+- Uses class strategy (not media query)
+- Toggle in header
+- Persisted to localStorage
+
+Usage in components:
+  className="text-gray-900 dark:text-white"
+  className="bg-white dark:bg-gray-900"
+
+
+COMMON PATTERNS
+---------------
+
+Loading state:
+  {isLoading ? (
+    <Loader2 className="animate-spin" />
+  ) : (
+    <ActualContent />
+  )}
+
+Error state:
+  {isError && (
+    <div className="text-red-500">
+      Error: {error.message}
+    </div>
+  )}
+
+Empty state:
+  {data?.length === 0 && (
+    <div>No results found</div>
+  )}
+
+
+SEARCH IMPLEMENTATION
+---------------------
+
+Markets page search (Markets.tsx):
+- Controlled input updates searchQuery state
+- useMarketSearch(searchQuery) hook
+- Triggers on every keystroke (debounced by React Query)
+- Dropdown shows results or "no results"
+- Click result navigates to ticker page
+
+Key code:
+  const [searchQuery, setSearchQuery] = useState('')
+  const { data: searchData, isLoading } = useMarketSearch(searchQuery)
+
+The hook (useApi.ts):
+  export function useMarketSearch(query: string, limit = 10) {
+    return useQuery({
+      queryKey: ['market', 'search', query],
+      queryFn: () => api.searchMarket(query, limit),
+      enabled: query.length >= 1,  // Don't search empty string
+      staleTime: 1000 * 60 * 5,    // Cache 5 minutes
+    })
+  }
+
+
+CHARTS
+------
+
+Using Recharts for all visualizations.
+
+Common setup:
+  <ResponsiveContainer width="100%" height={300}>
+    <LineChart data={chartData}>
+      <XAxis dataKey="date" />
+      <YAxis />
+      <Tooltip />
+      <Line dataKey="value" />
+    </LineChart>
+  </ResponsiveContainer>
+
+Data format expected:
+  [
+    { date: '2024-01-01', value: 100 },
+    { date: '2024-01-02', value: 105 },
+    ...
+  ]
+
+
+ROUTING
+-------
+
+React Router v6 (BrowserRouter).
+
+Routes defined in App.tsx:
+  /           -> Dashboard
+  /articles   -> Articles
+  /markets    -> Markets
+  /trends     -> Trends
+  /tickers/:symbol -> TickerAnalysis
+  /nlp        -> NLPAnalysis
+
+Navigation in components:
+  <Link to="/markets">Markets</Link>
+
+  // Programmatic
+  const navigate = useNavigate()
+  navigate(`/tickers/${symbol}`)
+
+
+BUILDING FOR PRODUCTION
+-----------------------
+
+Development:
+  npm run dev
+  # Runs Vite dev server on :5173
+
+Production build:
+  npm run build
+  # Outputs to dist/
+  # Serve with nginx (see Dockerfile)
+
+The Docker production build:
+- Multi-stage Dockerfile
+- Builds React app
+- Serves with nginx
+- Much smaller image than dev

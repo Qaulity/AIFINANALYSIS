@@ -1,0 +1,156 @@
+MARKET DATA INTEGRATION
+=======================
+
+How stock data works in this project and why it's set up this way.
+
+
+THE PROBLEM
+-----------
+
+Originally used yfinance for everything - search, quotes, history.
+
+yfinance is unofficial (scrapes Yahoo Finance) and has issues:
+- No published rate limits, just randomly fails
+- Search requires downloading price data to "validate" symbols
+- Heavy requests for simple operations
+- Error messages are useless ("Expecting value: line 1 column 1")
+
+Search was particularly bad:
+- User types "AAPL"
+- We'd call yf.download() to check if AAPL is real
+- This downloads actual price data just to validate a symbol exists
+- Multiply by every keystroke = rate limited instantly
+
+
+THE SOLUTION
+------------
+
+Split responsibilities between APIs:
+
+Finnhub (search):
+- Has a dedicated /search endpoint designed for typeahead
+- Returns symbol, name, type - exactly what we need
+- 60 requests/minute free tier
+- Fast, lightweight responses
+- No unnecessary data transfer
+
+yfinance (everything else):
+- Historical price data for charts
+- Current quotes
+- Company info
+- These requests happen less frequently (when viewing a specific stock)
+- Can batch multiple symbols in one request
+
+
+HOW SEARCH WORKS NOW
+--------------------
+
+1. User types in search box
+2. Frontend debounces slightly (React Query)
+3. Backend calls Finnhub /search endpoint
+4. Results cached for 1 hour
+5. Return immediately
+
+If Finnhub fails (rate limit, down, no API key):
+1. Fall back to local candidate list
+2. Match query against known symbols (AAPL, MSFT, etc.)
+3. Match against ETFs and indices
+4. Return candidates without validation
+5. Not as comprehensive but always works
+
+
+API KEYS NEEDED
+---------------
+
+Finnhub (required for good search):
+- Free at https://finnhub.io/register
+- Add to backend/.env: FINNHUB_API_KEY=xxxxx
+- 60 requests/minute is plenty for search
+
+Alpha Vantage (optional, for stocks endpoint):
+- Used by /api/stocks/* endpoints
+- 25 requests/day on free tier (very limited)
+- Only needed if using that specific feature
+
+NewsAPI (required for news):
+- Used by article fetching
+- Not related to market data
+
+
+RATE LIMITING STILL HAPPENS
+---------------------------
+
+The Markets page loads a bunch of stuff on mount:
+- Market indices (^DJI, ^GSPC, etc.)
+- Trending stocks
+- Chart data for selected index
+
+These all hit yfinance and can still get rate limited.
+
+Mitigations in place:
+- Aggressive caching (see ARCHITECTURE.txt for TTLs)
+- Sample/fallback data when API fails
+- Retry logic with exponential backoff
+
+Could improve by:
+- Adding Finnhub or Twelve Data as backup for quotes
+- Reducing number of symbols loaded on page mount
+- Lazy loading some data
+
+
+FILE LOCATIONS
+--------------
+
+backend/app/services/market_data.py
+- MarketDataService class
+- _finnhub_search() - Finnhub integration
+- _fallback_search() - local candidate matching
+- search_symbols() - main entry point, tries Finnhub then fallback
+- get_quote(), get_history(), etc. - yfinance methods
+
+backend/app/config.py
+- FINNHUB_API_KEY setting
+
+backend/app/api/routes.py
+- /api/market/* endpoints that use MarketDataService
+
+
+DEBUGGING TIPS
+--------------
+
+Check if Finnhub is working:
+  docker logs fna-api | grep -i finnhub
+
+Check for yfinance rate limits:
+  docker logs fna-api | grep -i "failed to get ticker"
+
+Clear search cache:
+  docker exec fna-redis redis-cli KEYS "cache:yf:search:*"
+  docker exec fna-redis redis-cli DEL "cache:yf:search:AAPL"
+
+Test search endpoint directly:
+  curl "http://localhost:5000/api/market/search?q=AAPL"
+
+
+RESPONSE FORMAT
+---------------
+
+Search returns:
+{
+  "results": [
+    {"symbol": "AAPL", "name": "Apple Inc", "type": "EQUITY", "exchange": ""},
+    {"symbol": "AAPL.MX", "name": "Apple Inc", "type": "EQUITY", "exchange": ""}
+  ],
+  "count": 2
+}
+
+Quote returns:
+{
+  "symbol": "AAPL",
+  "name": "Apple Inc.",
+  "price": 229.87,
+  "change": 1.37,
+  "change_percent": 0.60,
+  "previous_close": 228.50,
+  ...
+}

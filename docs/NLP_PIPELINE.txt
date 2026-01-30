@@ -1,0 +1,213 @@
+NLP PIPELINE
+============
+
+How the natural language processing works in this project.
+
+
+OVERVIEW
+--------
+
+The NLP pipeline takes financial news articles and extracts:
+1. Sentiment (positive/negative/neutral with confidence scores)
+2. Entities (companies, people, monetary values, percentages)
+3. Tickers (stock symbols mentioned)
+4. Topics (clustering articles by theme)
+
+
+THE COMPONENTS
+--------------
+
+FinBERT Sentiment Analyzer (finbert_analyzer.py):
+- Uses ProsusAI/finbert model from HuggingFace
+- Fine-tuned on financial text (10K filings, analyst reports, news)
+- Returns: score (-1 to 1), label (positive/negative/neutral), confidence
+- Does sentence-level analysis too - each sentence gets its own score
+
+Entity Extractor (entity_extractor.py):
+- Uses spaCy's en_core_web_sm model
+- Extracts named entities: ORG, PERSON, MONEY, PERCENT
+- Custom ticker extraction using regex + company name mapping
+- Handles variations like "$AAPL", "Apple Inc.", "Apple"
+
+Topic Modeler (topic_modeler.py):
+- Uses BERTopic with sentence transformers
+- Clusters similar articles together
+- Extracts keywords for each topic
+- Needs minimum ~10 articles to work well
+
+NLP Pipeline (nlp_pipeline.py):
+- Orchestrates all the above
+- Processes articles in batches
+- Stores results back to Redis
+- Handles errors gracefully (one bad article doesn't stop the batch)
+
+
+WHY FINBERT
+-----------
+
+Tried TextBlob first - it was bad for financial text.
+
+Examples of TextBlob failing:
+- "Stock plummeted 20%" -> neutral (should be very negative)
+- "Beat analyst expectations" -> slightly positive (should be more positive)
+- "Company issued guidance warning" -> neutral (should be negative)
+
+FinBERT understands financial language:
+- Trained on financial news and SEC filings
+- Knows that "plummeted" is very negative
+- Understands hedged language and analyst speak
+- Much better accuracy for our use case
+
+Trade-off: FinBERT is slower and uses more memory. Worth it for accuracy.
+
+
+SENTENCE-LEVEL ANALYSIS
+-----------------------
+
+Articles get analyzed at two levels:
+
+Overall sentiment:
+- Concatenate title + content
+- Run through FinBERT
+- Get single score for whole article
+
+Sentence breakdown:
+- Split article into sentences
+- Score each sentence individually
+- Count positive/negative/neutral sentences
+- Store in article analysis
+
+Why both?
+- Overall score is good for aggregation and charts
+- Sentence breakdown shows which parts are positive/negative
+- Helps explain why an article got its score
+
+
+TICKER EXTRACTION
+-----------------
+
+Finding stock symbols in text is harder than it sounds.
+
+We look for:
+- Explicit tickers: $AAPL, NASDAQ:MSFT
+- Company names: "Apple Inc.", "Microsoft Corporation"
+- Common variations: "Apple", "Microsoft"
+
+Process:
+1. Regex finds $SYMBOL patterns
+2. spaCy NER finds ORG entities
+3. Match ORG names against company name database
+4. Validate against known ticker list
+5. Deduplicate and return
+
+Edge cases handled:
+- "Apple" the fruit vs "Apple" the company (context helps)
+- Partial matches: "JP Morgan" -> JPM
+- Multiple tickers in one article
+
+
+TOPIC MODELING
+--------------
+
+BERTopic clusters articles by content similarity.
+
+How it works:
+1. Convert article text to embeddings (sentence-transformers)
+2. Reduce dimensions (UMAP)
+3. Cluster similar embeddings (HDBSCAN)
+4. Extract keywords per cluster (c-TF-IDF)
+
+Output:
+- Topic ID (-1 = outlier, doesn't fit any cluster)
+- Representative keywords
+- Topic distribution across articles
+
+Configuration:
+- min_topic_size: minimum articles per topic (default 5)
+- Fewer articles = fewer/broader topics
+- More articles = more specific topics
+
+Limitations:
+- Needs minimum ~10 articles to produce meaningful topics
+- First run trains the model, subsequent runs use cached
+- Can "fit" new articles to existing topics or retrain
+
+
+BATCH PROCESSING
+----------------
+
+Articles are processed in batches for efficiency.
+
+NLP_BATCH_SIZE setting (default 16):
+- How many articles to process at once
+- Higher = faster but more memory
+- Lower = slower but works on limited hardware
+
+GPU acceleration:
+- If CUDA available and USE_GPU=true, uses GPU
+- FinBERT is 5-10x faster on GPU
+- Falls back to CPU if GPU not available or fails
+
+Error handling:
+- One article failing doesn't stop the batch
+- Errors logged, processing continues
+- Failed articles can be retried later
+
+
+RUNNING THE PIPELINE
+--------------------
+
+Via API:
+  POST /api/nlp/analyze?limit=50&fit_topics=true
+
+Parameters:
+- limit: max articles to process
+- fit_topics: whether to run topic modeling
+
+Via code:
+  from app.services.nlp import NLPPipeline
+  pipeline = NLPPipeline()
+  results = pipeline.process_articles(limit=50)
+
+
+STORAGE
+-------
+
+Results stored in Redis:
+
+Article analysis (per article):
+- Key: nlp:article:{article_id}
+- Contains: sentiment, entities, tickers, topic_id
+
+Ticker aggregates:
+- Key: ticker:{symbol}
+- Running count of mentions, average sentiment
+
+Topic model:
+- Stored as pickle in Redis
+- Reused for classifying new articles
+
+
+PERFORMANCE NOTES
+-----------------
+
+First run is slow:
+- Downloads FinBERT model (~440MB)
+- Downloads spaCy model (~12MB)
+- Loads everything into memory
+- Can take 30-60 seconds
+
+Subsequent runs fast:
+- Models stay in memory
+- Just inference time
+- ~0.5-1 second per article on GPU
+
+Memory usage:
+- FinBERT: ~1-2GB
+- BERTopic: ~500MB
+- Total: 2-3GB for full pipeline
+
+If memory is limited:
+- Use SENTIMENT_MODEL=textblob (much smaller)
+- Disable topic modeling: ENABLE_TOPIC_MODELING=false
+- Reduce batch size: NLP_BATCH_SIZE=4

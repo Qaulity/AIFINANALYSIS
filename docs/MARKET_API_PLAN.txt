@@ -1,0 +1,139 @@
+MARKET DATA API REFACTOR PLAN
+==============================
+
+Status: IMPLEMENTED (2026-01-26)
+
+Problem: yfinance rate limiting breaks search functionality. Need to split API usage.
+
+Solution: Use Finnhub for search, keep yfinance for historical data.
+
+
+API RESPONSIBILITIES
+--------------------
+
+Finnhub (free tier: 60 req/min)
+- Symbol search (user typing in search box)
+- Returns: symbol, company name, type
+- Endpoint: GET https://finnhub.io/api/v1/search?q={query}&token={key}
+
+yfinance (no official limit, but gets rate limited)
+- Historical price data (charts)
+- Current quotes
+- Batch requests for multiple symbols
+- Keep existing implementation, just remove it from search
+
+
+CACHING STRATEGY
+----------------
+
+Search results: 1 hour (3600s)
+- Symbol lists dont change often
+- Reduces Finnhub calls significantly
+
+Current quotes: 2 minutes (120s)
+- User expects relatively live data
+- Balance between freshness and rate limits
+
+Historical data: 30 minutes (1800s)
+- Past prices dont change
+- Charts dont need to update constantly
+
+Company info: 24 hours (86400s)
+- Market cap, PE ratio, description etc
+- This stuff updates quarterly at most
+
+
+FILES TO MODIFY
+---------------
+
+backend/app/services/market_data.py
+- Add FinnhubProvider class or methods
+- Modify search_symbols() to use Finnhub instead of yf.download validation
+- Update cache TTLs per the strategy above
+
+backend/app/config.py (or .env)
+- Add FINNHUB_API_KEY setting
+
+backend/.env
+- Add actual API key: FINNHUB_API_KEY=xxxxx
+
+
+SEARCH IMPLEMENTATION
+---------------------
+
+New search flow:
+1. User types query
+2. Call Finnhub /search endpoint
+3. Return results directly (no validation needed - Finnhub only returns real symbols)
+4. Cache results for 1 hour
+
+Finnhub search response format:
+{
+  "count": 4,
+  "result": [
+    {"symbol": "AAPL", "description": "Apple Inc", "type": "Common Stock"},
+    {"symbol": "AAPL.SW", "description": "Apple Inc", "type": "Common Stock"},
+    ...
+  ]
+}
+
+Map to our format:
+{
+  "symbol": result["symbol"],
+  "name": result["description"],
+  "type": map_finnhub_type(result["type"]),  # Common Stock -> EQUITY, etc
+  "exchange": result.get("displaySymbol", "")
+}
+
+
+FALLBACK LOGIC
+--------------
+
+If Finnhub fails (rate limit, down, etc):
+1. Fall back to current yfinance-based search (the candidate list approach)
+2. Log warning so we know its happening
+3. Still return results to user
+
+
+QUOTE/HISTORY - NO CHANGES NEEDED
+---------------------------------
+
+Keep existing yfinance implementation for:
+- get_quote()
+- get_quotes()
+- get_history()
+- get_indices()
+
+Just update cache TTLs:
+- QUOTE_CACHE_TTL = 120 (2 min)
+- HISTORY_CACHE_TTL = 1800 (30 min)
+- COMPANY_CACHE_TTL = 86400 (24 hours)
+
+
+ENV SETUP
+---------
+
+User needs to:
+1. Go to https://finnhub.io/register
+2. Get free API key
+3. Add to backend/.env: FINNHUB_API_KEY=your_key_here
+
+
+TESTING
+-------
+
+After implementation:
+1. Search for "AAPL" - should return results fast, no yfinance errors in logs
+2. Search for "Microsoft" - should find MSFT
+3. Check redis cache: should see finnhub search keys
+4. View a stock detail page - should still load charts (yfinance)
+5. Rate limit test: rapid searches should not fail (cached + 60/min limit)
+
+
+FUTURE IMPROVEMENTS (not in this PR)
+------------------------------------
+
+- Add Twelve Data as backup for historical data
+- Add Alpha Vantage for fundamentals
+- Circuit breaker pattern for API failures
+- Request queuing to stay under rate limits

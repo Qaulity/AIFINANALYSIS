@@ -1,0 +1,109 @@
+CHANGELOG
+=========
+
+Notable changes and improvements to the project.
+
+
+2026-01-30: AI Insights Dashboard Card
+--------------------------------------
+
+Added LLM-powered market analysis using Claude API.
+
+What it does:
+- Generates market insights every 15 minutes in background
+- Shows market summary, trend alerts, sector analysis, observations
+- Caches to Redis for instant frontend retrieval
+- Manual refresh with rate limiting (1 req/min)
+
+Backend changes:
+- backend/app/config.py - Added ANTHROPIC_API_KEY and AI settings
+- backend/app/services/ai_insights.py - New service (gather context, call Claude, cache)
+- backend/app/api/routes.py - Added /api/ai/insights endpoints
+- backend/app/worker.py - Added scheduled generation job
+- backend/requirements.txt - Added anthropic>=0.18.0
+- backend/run_server.py - Helper to load .env properly
+
+Frontend changes:
+- frontend/src/types/index.ts - Added AI insights types
+- frontend/src/services/api.ts - Added API functions
+- frontend/src/hooks/useApi.ts - Added useAIInsights, useRefreshAIInsights
+- frontend/src/components/AIInsightsCard.tsx - New card component
+- frontend/src/pages/Dashboard.tsx - Added card below Market Overview
+
+API endpoints:
+- GET /api/ai/insights - Returns cached insights
+- POST /api/ai/insights/refresh - Manual refresh (rate limited)
+- GET /api/ai/insights/status - Service status
+
+Testing done:
+- Verified all three endpoints return correct responses
+- Tested rate limiting (returns 429 with retry_after on second request)
+- Tested generation with real Claude API call
+- Verified frontend card displays all sections correctly
+- Tested refresh button and expandable sections
+
+Setup required:
+- Add ANTHROPIC_API_KEY to backend/.env
+- Use run_server.py to start backend (handles .env loading)
+
+See AI_INSIGHTS.txt for full documentation.
+
+
+---
+
+
+2026-01-26: Market Search Overhaul
+----------------------------------
+
+Problem:
+- Search was broken, always showed "no results found"
+- yfinance rate limiting killed the search functionality
+- Searching for "AAPL" would download price data just to validate the symbol exists
+
+Root cause:
+- yf.download() was being used to validate symbols
+- Missing group_by="ticker" parameter caused column indexing issues
+- When yfinance got rate limited, search returned nothing
+
+Fix:
+- Added Finnhub as primary search provider (fast, dedicated search API)
+- yfinance-based search kept as fallback
+- If neither works, returns local candidate list (always shows something)
+
+New architecture:
+- Finnhub: symbol search (60 req/min free tier)
+- yfinance: quotes, history, company info
+- See MARKET_DATA.txt for details
+
+Other changes this session:
+- Updated cache TTLs (history 30min, company info 24hr)
+- Added error display in search UI
+- Created docs folder with architecture documentation
+- Added FINNHUB_API_KEY to config
+
+
+Files changed:
+- backend/app/services/market_data.py (major rewrite of search)
+- backend/app/config.py (added FINNHUB_API_KEY)
+- backend/.env (added FINNHUB_API_KEY)
+- frontend/src/pages/Markets.tsx (error handling)
+- docs/* (new documentation)
+
+
+Setup required:
+- Get free API key from https://finnhub.io/register
+- Add to backend/.env: FINNHUB_API_KEY=your_key
+- Restart API container
+
+
+---
+
+Previous work (before this session):
+- Initial project setup
+- Flask API with RESTX
+- FinBERT sentiment analysis
+- spaCy entity extraction
+- BERTopic topic modeling
+- React frontend with React Query
+- Docker compose setup
+- NewsAPI and RSS integration

@@ -1,0 +1,275 @@
+AI INSIGHTS FEATURE
+===================
+
+Dashboard card that shows LLM-generated market analysis using Claude API.
+Generates insights every 15 minutes in background, caches to Redis for instant retrieval.
+
+
+WHAT IT DOES
+------------
+
+Takes recent articles from Redis, sends context to Claude, gets back:
+- Market summary (2-3 sentences)
+- Trend alerts (ticker-specific bullish/bearish/volatile/momentum signals)
+- Sector analysis
+- Key observations (bullet points)
+- Sentiment outlook
+
+Users see insights instantly from cache. Manual refresh button with rate limiting.
+
+
+FILES CREATED/MODIFIED
+----------------------
+
+Backend:
+  backend/app/config.py              - Added Claude API settings
+  backend/app/services/ai_insights.py - New service (main logic)
+  backend/app/services/__init__.py   - Export new service
+  backend/app/api/routes.py          - Added /api/ai/* endpoints
+  backend/app/worker.py              - Added scheduled generation job
+  backend/requirements.txt           - Added anthropic>=0.18.0
+  backend/run_server.py              - Helper script to load .env properly
+
+Frontend:
+  frontend/src/types/index.ts              - Added AI insights types
+  frontend/src/services/api.ts             - Added API functions
+  frontend/src/hooks/useApi.ts             - Added React Query hooks
+  frontend/src/components/AIInsightsCard.tsx - New component
+  frontend/src/pages/Dashboard.tsx         - Added card to dashboard
+
+
+CONFIGURATION
+-------------
+
+Add to backend/.env:
+  ANTHROPIC_API_KEY=sk-ant-xxxxx
+
+Optional settings (defaults shown):
+  AI_INSIGHTS_ENABLED=true
+  AI_INSIGHTS_GENERATION_INTERVAL=15    # minutes
+  AI_INSIGHTS_CACHE_TTL=1200            # seconds (20 min)
+  AI_INSIGHTS_MODEL=claude-sonnet-4-20250514
+  AI_INSIGHTS_MAX_TOKENS=1500
+
+
+API ENDPOINTS
+-------------
+
+GET /api/ai/insights
+  Returns cached insights instantly.
+  Response:
+  {
+    "status": "success",
+    "insights": {
+      "market_summary": "...",
+      "trend_alerts": [...],
+      "sector_analysis": "...",
+      "key_observations": [...],
+      "sentiment_outlook": "...",
+      "generated_at": "2026-01-30T10:20:44",
+      "is_stale": false
+    },
+    "is_generating": false
+  }
+
+POST /api/ai/insights/refresh
+  Manual refresh. Rate limited to 1 request per minute.
+  Returns 429 if rate limited with retry_after field.
+
+GET /api/ai/insights/status
+  Service status check.
+  Response:
+  {
+    "configured": true,
+    "enabled": true,
+    "has_cached_insights": true,
+    "is_generating": false,
+    "is_rate_limited": false,
+    "generation_interval_minutes": 15,
+    "cache_ttl_seconds": 1200,
+    "last_generated": "2026-01-30T10:20:44"
+  }
+
+
+HOW IT WORKS
+------------
+
+Background generation (every 15 min):
+  1. Worker calls generate_ai_insights_job()
+  2. Service gathers context from Redis (last 200 articles, 7 days)
+  3. Calculates sentiment stats, top tickers, top sources
+  4. Builds prompt with context data
+  5. Calls Claude API
+  6. Parses JSON response
+  7. Caches to Redis with 20 min TTL
+
+Frontend request:
+  1. Dashboard loads, useAIInsights() fires
+  2. GET /api/ai/insights returns cached data instantly
+  3. React Query auto-refreshes every 2 min
+  4. Card displays data with expandable sections
+
+Manual refresh:
+  1. User clicks refresh button
+  2. POST /api/ai/insights/refresh
+  3. Rate limit checked (1 min cooldown)
+  4. If allowed, generates new insights
+  5. Returns new data or 429 if rate limited
+
+
+RATE LIMITING
+-------------
+
+Manual refresh is limited to once per minute.
+Prevents abuse of Claude API.
+
+Rate limit stored in Redis with 60s TTL.
+Frontend disables button and shows wait time when rate limited.
+
+
+TESTING DONE
+------------
+
+Backend API tests:
+
+  # Check status
+  curl http://localhost:5000/api/ai/insights/status
+  -> Returns configured: true/false, enabled, cache status
+
+  # Get cached insights
+  curl http://localhost:5000/api/ai/insights
+  -> Returns cached insights or "unavailable" message
+
+  # Manual refresh
+  curl -X POST http://localhost:5000/api/ai/insights/refresh
+  -> Generates new insights, returns them
+
+  # Rate limit test
+  curl -X POST http://localhost:5000/api/ai/insights/refresh
+  curl -X POST http://localhost:5000/api/ai/insights/refresh
+  -> Second request returns status: "rate_limited", retry_after: 60
+
+Direct service test:
+
+  cd backend
+  python -c "
+  from dotenv import load_dotenv
+  load_dotenv(override=True)
+  from app.config import get_settings
+  get_settings.cache_clear()
+  from app.services.ai_insights import get_ai_insights_service
+  service = get_ai_insights_service()
+  print('Configured:', service.is_configured())
+  context = service.gather_context_data()
+  print('Articles:', context.get('article_count'))
+  result = service.generate_insights(force=True)
+  print('Generated:', result is not None)
+  "
+
+Frontend test:
+  - Start backend: cd backend && python run_server.py
+  - Start frontend: cd frontend && npm run dev
+  - Open http://localhost:5173
+  - AI Insights card appears below Market Overview
+  - Shows market summary, trend alerts, observations
+  - Refresh button works, shows rate limit message if clicked too fast
+  - Expandable sections for sector analysis and extra observations
+
+
+SAMPLE OUTPUT
+-------------
+
+{
+  "market_summary": "Market sentiment remains neutral with a slight positive
+    bias based on recent news coverage, showing balanced distribution between
+    positive and negative stories.",
+  "trend_alerts": [
+    {
+      "ticker": "META",
+      "alert_type": "bullish",
+      "message": "Strong positive sentiment (0.90) driven by favorable coverage"
+    },
+    {
+      "ticker": "ABNB",
+      "alert_type": "bearish",
+      "message": "Highly negative sentiment (-0.96) due to layoff announcements"
+    },
+    {
+      "ticker": "MRNA",
+      "alert_type": "momentum",
+      "message": "Positive momentum from strategic partnership with Recordati"
+    },
+    {
+      "ticker": "AAPL",
+      "alert_type": "volatile",
+      "message": "Mixed signals as company shifts premium iPhone strategy"
+    }
+  ],
+  "sector_analysis": "Technology sector shows mixed signals with positive
+    developments in social media (META) and biotech partnerships (MRNA),
+    while facing headwinds from strategic shifts (AAPL).",
+  "key_observations": [
+    "News coverage heavily concentrated among major financial outlets",
+    "Employment concerns emerging as significant theme",
+    "Strategic partnerships driving individual stock movements",
+    "Sentiment distribution shows slight positive skew"
+  ],
+  "sentiment_outlook": "Near-term sentiment likely to remain neutral to
+    slightly positive, though employment data could introduce volatility."
+}
+
+
+TROUBLESHOOTING
+---------------
+
+"AI insights not configured"
+  - Check ANTHROPIC_API_KEY is set in .env
+  - Make sure .env is in backend/ directory
+  - Use run_server.py to start (handles .env loading)
+
+"No insights available"
+  - Need at least 5 articles in Redis
+  - Check Redis is running: redis-cli ping
+  - Run worker to fetch articles first
+
+Generation fails silently
+  - Check backend logs for Claude API errors
+  - Verify API key is valid
+  - Check rate limits on Anthropic dashboard
+
+Settings not loading from .env
+  - pydantic-settings caches with @lru_cache
+  - Use run_server.py which clears cache before loading
+  - Or restart Python process completely
+
+Frontend shows loading forever
+  - Check backend is running on port 5000
+  - Check browser console for CORS or network errors
+  - Verify /api/ai/insights returns valid JSON
+
+
+KNOWN ISSUES
+------------
+
+1. First request after server start may be slow
+   - AIInsightsService lazy-loads Anthropic client
+   - Subsequent requests are fast
+
+2. Worker generates on startup
+   - If no API key, logs warning and skips
+   - Not an error, just informational
+
+3. Cache cleared on Redis restart
+   - Insights regenerate on next scheduled run (up to 15 min)
+   - Or use manual refresh
+
+
+DEPENDENCIES
+------------
+
+Backend:
+  anthropic>=0.18.0   - Claude API client
+  python-dotenv       - .env file loading (already in project)
+
+Frontend:
+  No new dependencies - uses existing React Query setup

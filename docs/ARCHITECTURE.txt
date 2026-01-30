@@ -1,0 +1,150 @@
+ARCHITECTURE DECISIONS
+======================
+
+This doc explains why the project is structured the way it is.
+
+
+WHY THESE TECHNOLOGIES
+----------------------
+
+Flask over FastAPI:
+- Flask-RESTX gives us auto-generated Swagger docs with minimal setup
+- The app is mostly I/O bound (API calls, Redis), not CPU bound
+- FastAPI's async benefits don't matter much here since yfinance/requests are sync anyway
+- Flask is simpler to debug and has a bigger ecosystem
+
+Redis over PostgreSQL:
+- All our data is ephemeral - news articles, cached quotes, sentiment scores
+- No complex queries or joins needed
+- Redis sorted sets are perfect for time-series data (articles by date)
+- Caching and data storage in one place, less infrastructure
+- If we needed persistent historical data later, could add Postgres alongside
+
+React + Vite over Next.js:
+- This is a dashboard, not a content site - no SEO needed
+- Client-side rendering is fine, simpler mental model
+- Vite is fast for development
+- No server-side complexity to manage
+
+
+SERVICE STRUCTURE
+-----------------
+
+backend/app/services/ is organized by domain:
+
+nlp/
+  - finbert_analyzer.py  -> sentiment analysis
+  - entity_extractor.py  -> NER and ticker extraction
+  - topic_modeler.py     -> BERTopic clustering
+  - nlp_pipeline.py      -> orchestrates all the above
+
+news_fetcher.py  -> NewsAPI integration
+rss_parser.py    -> RSS feed parsing
+market_data.py   -> stock quotes and search (yfinance + Finnhub)
+
+Each service is a class that can be instantiated and used independently.
+The NLP pipeline combines the individual NLP services.
+
+
+WHY FINBERT OVER BASIC SENTIMENT
+--------------------------------
+
+Started with TextBlob but it was terrible for financial text.
+"Stock plummeted" got neutral scores, "beat expectations" was slightly positive.
+
+FinBERT is trained on financial news specifically:
+- Understands domain jargon (earnings, guidance, SEC filings)
+- Better at sarcasm and hedged language
+- Slower but much more accurate
+
+TextBlob is still available as a fallback (SENTIMENT_MODEL=textblob) for:
+- Faster processing when accuracy matters less
+- Lower memory environments
+- Testing/debugging
+
+
+CACHING STRATEGY
+----------------
+
+Different data has different freshness requirements:
+
+Search results (1 hour):
+- Stock symbols don't change
+- Same search query = same results
+- High hit rate, reduces API calls significantly
+
+Current quotes (2 minutes):
+- Users want "live-ish" prices
+- 2 min delay is acceptable for a news analysis app
+- Not a trading platform, doesn't need sub-second updates
+
+Historical data (30 minutes):
+- Yesterday's prices don't change
+- Charts don't need constant refreshing
+- Big payoff since history requests are expensive
+
+Company info (24 hours):
+- Market cap, PE ratio, description
+- Updates quarterly at most
+- Rarely changes, cache aggressively
+
+Articles (30 days TTL):
+- News gets stale but we keep it for trend analysis
+- Redis handles expiry automatically
+
+
+DOCKER SETUP
+------------
+
+Four containers:
+1. redis       - data store, no dependencies
+2. api         - Flask backend, depends on redis
+3. pipeline    - background worker for scheduled jobs, depends on redis
+4. frontend    - React dev server, depends on api
+
+Why separate api and pipeline:
+- API needs to be responsive, can't be blocked by long NLP jobs
+- Pipeline can process articles in background without affecting API latency
+- Can scale them independently if needed
+
+Volume mounts in dev:
+- ./backend:/app and ./frontend:/app
+- Code changes reflect immediately without rebuild
+- node_modules excluded to avoid OS-specific issues
+
+
+ERROR HANDLING APPROACH
+-----------------------
+
+General philosophy: fail gracefully, show something useful.
+
+Market data:
+- If yfinance fails, use cached data if available
+- If cache is empty, use sample/fallback data
+- If Finnhub fails, fall back to local symbol list
+- User always sees something, logs capture the real error
+
+NLP:
+- If FinBERT fails to load, fall back to TextBlob
+- If topic modeling fails (not enough docs), skip it
+- Individual article failures don't stop batch processing
+
+API:
+- Return partial results when possible
+- Include error details in response for debugging
+- HTTP 200 with empty results is better than 500 for UI
+
+
+THINGS I'D DO DIFFERENTLY
+-------------------------
+
+If starting over:
+- Would use a proper job queue (Celery/RQ) instead of simple background worker
+- Would add proper logging aggregation (the docker logs work but aren't great)
+- Would set up proper dev/staging/prod env separation from the start
+- Would add more comprehensive tests earlier
+
+Not worth changing now:
+- The current setup works fine for the scale we're at
+- Refactoring would be effort without much benefit
+- Can always migrate later if needed
