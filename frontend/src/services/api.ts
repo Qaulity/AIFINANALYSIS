@@ -361,8 +361,19 @@ export async function getAIInsights(): Promise<AIInsightsResponse> {
 
 // manually refresh AI insights (rate limited to 1/min)
 export async function refreshAIInsights(): Promise<AIInsightsResponse> {
-  const { data } = await api.post('/ai/insights/refresh')
-  return data
+  try {
+    const { data } = await api.post('/ai/insights/refresh')
+    return data
+  } catch (error: unknown) {
+    // Handle 429 rate limit - return the response data instead of throwing
+    if (error && typeof error === 'object' && 'response' in error) {
+      const axiosError = error as { response?: { status?: number; data?: AIInsightsResponse } }
+      if (axiosError.response?.status === 429 && axiosError.response?.data) {
+        return axiosError.response.data
+      }
+    }
+    throw error
+  }
 }
 
 // get AI insights service status
