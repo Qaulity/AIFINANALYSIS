@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Search, Filter, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Search, Filter, ChevronLeft, ChevronRight, Newspaper } from 'lucide-react'
 import { useArticles } from '../hooks/useApi'
 import ArticleCard from '../components/ArticleCard'
 
@@ -7,13 +7,25 @@ export default function Articles() {
   const [page, setPage] = useState(1)
   const [sentiment, setSentiment] = useState<string>('')
   const [source, setSource] = useState('')
+  const [keyword, setKeyword] = useState('')
+  const [debouncedKeyword, setDebouncedKeyword] = useState('')
   const [days, setDays] = useState(7)
+
+  // Debounce keyword search to avoid too many API calls
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedKeyword(keyword)
+      setPage(1) // Reset to first page when keyword changes
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [keyword])
 
   const { data, isLoading, isFetching } = useArticles({
     page,
     per_page: 12,
     sentiment: sentiment || undefined,
     source: source || undefined,
+    keyword: debouncedKeyword || undefined,
     days,
   })
 
@@ -31,54 +43,89 @@ export default function Articles() {
 
       {/* Filters */}
       <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4">
-        <div className="flex flex-wrap items-center gap-4">
-          {/* Source Search */}
-          <div className="relative flex-1 min-w-[200px]">
+        <div className="flex flex-col gap-4">
+          {/* Keyword Search - Full Width */}
+          <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Search by source..."
-              value={source}
-              onChange={(e) => {
-                setSource(e.target.value)
-                setPage(1)
-              }}
-              className="w-full pl-10 pr-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Search articles by keywords (e.g., layoff, earnings, china)..."
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+            {isFetching && keyword && (
+              <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+              </div>
+            )}
           </div>
 
-          {/* Sentiment Filter */}
-          <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-gray-400" />
+          {/* Secondary Filters Row */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Source Filter */}
+            <div className="relative flex-1 min-w-[160px] max-w-[240px]">
+              <Newspaper className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Filter by source..."
+                value={source}
+                onChange={(e) => {
+                  setSource(e.target.value)
+                  setPage(1)
+                }}
+                className="w-full pl-10 pr-4 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {/* Sentiment Filter */}
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-gray-400" />
+              <select
+                value={sentiment}
+                onChange={(e) => {
+                  setSentiment(e.target.value)
+                  setPage(1)
+                }}
+                className="px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All Sentiments</option>
+                <option value="positive">Bullish</option>
+                <option value="negative">Bearish</option>
+                <option value="neutral">Neutral</option>
+              </select>
+            </div>
+
+            {/* Time Range */}
             <select
-              value={sentiment}
+              value={days}
               onChange={(e) => {
-                setSentiment(e.target.value)
+                setDays(Number(e.target.value))
                 setPage(1)
               }}
               className="px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">All Sentiments</option>
-              <option value="positive">Bullish</option>
-              <option value="negative">Bearish</option>
-              <option value="neutral">Neutral</option>
+              <option value={1}>Last 24 hours</option>
+              <option value={7}>Last 7 days</option>
+              <option value={14}>Last 14 days</option>
+              <option value={30}>Last 30 days</option>
             </select>
-          </div>
 
-          {/* Time Range */}
-          <select
-            value={days}
-            onChange={(e) => {
-              setDays(Number(e.target.value))
-              setPage(1)
-            }}
-            className="px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value={1}>Last 24 hours</option>
-            <option value={7}>Last 7 days</option>
-            <option value={14}>Last 14 days</option>
-            <option value={30}>Last 30 days</option>
-          </select>
+            {/* Active Filters Summary */}
+            {(keyword || source || sentiment) && (
+              <button
+                onClick={() => {
+                  setKeyword('')
+                  setSource('')
+                  setSentiment('')
+                  setPage(1)
+                }}
+                className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -99,9 +146,17 @@ export default function Articles() {
           {/* Empty State */}
           {data?.articles.length === 0 && (
             <div className="text-center py-12">
-              <p className="text-gray-500 dark:text-gray-400">
+              <div className="text-gray-400 dark:text-gray-500 mb-4">
+                <Search className="w-12 h-12 mx-auto" />
+              </div>
+              <p className="text-gray-500 dark:text-gray-400 mb-2">
                 No articles found matching your criteria.
               </p>
+              {(keyword || source || sentiment) && (
+                <p className="text-sm text-gray-400 dark:text-gray-500">
+                  Try adjusting your filters or search terms.
+                </p>
+              )}
             </div>
           )}
 

@@ -32,6 +32,7 @@ export async function getArticles(params?: {
   sentiment?: string
   source?: string
   ticker?: string
+  keyword?: string
   days?: number
 }): Promise<ArticleListResponse> {
   const { data } = await api.get('/articles', { params })

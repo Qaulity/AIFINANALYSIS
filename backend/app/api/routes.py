@@ -90,6 +90,7 @@ class ArticleList(Resource):
     @articles_ns.param("sentiment", "Filter by sentiment (positive, negative, neutral)")
     @articles_ns.param("source", "Filter by source name")
     @articles_ns.param("ticker", "Filter by ticker symbol")
+    @articles_ns.param("keyword", "Search keywords in title and description (supports multiple words)")
     @articles_ns.param("days", "Articles from last N days", type=int, default=7)
     @articles_ns.marshal_with(article_list_model)
     def get(self):
@@ -102,6 +103,7 @@ class ArticleList(Resource):
         sentiment_filter = request.args.get("sentiment")
         source_filter = request.args.get("source")
         ticker_filter = request.args.get("ticker")
+        keyword_filter = request.args.get("keyword")
         days = request.args.get("days", 7, type=int)
 
         # Calculate offset
@@ -111,13 +113,22 @@ class ArticleList(Resource):
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(days=days)
 
-        # Get articles
+        # Get articles - fetch more when filtering by keyword to ensure enough results
+        fetch_limit = per_page * 10 if keyword_filter else per_page * 2
         articles = redis_client.get_articles(
             offset=offset,
-            limit=per_page * 2,  # Fetch extra for filtering
+            limit=fetch_limit,
             start_date=start_date,
             end_date=end_date
         )
+
+        # Prepare keyword search terms (case-insensitive)
+        keyword_terms = []
+        if keyword_filter:
+            # Support both space-separated and comma-separated keywords
+            keyword_filter = keyword_filter.strip()
+            if keyword_filter:
+                keyword_terms = [term.strip().lower() for term in keyword_filter.replace(",", " ").split() if term.strip()]
 
         # Apply filters
         filtered = []
@@ -136,6 +147,16 @@ class ArticleList(Resource):
             # Ticker filter
             if ticker_filter:
                 if ticker_filter.upper() not in [t.upper() for t in article.get("tickers", [])]:
+                    continue
+
+            # Keyword filter - search in title and description
+            if keyword_terms:
+                title = (article.get("title") or "").lower()
+                description = (article.get("description") or "").lower()
+                searchable_text = f"{title} {description}"
+
+                # Check if ALL keyword terms are present (AND logic)
+                if not all(term in searchable_text for term in keyword_terms):
                     continue
 
             filtered.append(article)
